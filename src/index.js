@@ -1,28 +1,25 @@
 require('dotenv').config()
 const Web3 = require('web3')
 const HDWalletProvider = require('@truffle/hdwallet-provider')
-const autoTopUpABI = require('./abi/registry.json').abi
+const StrollManagerABI = require('./abi/StrollManager.abi.json')
+
 const accounts = require('./accounts.json')
 
 const HTTP_RPC = process.env.HTTP_RPC
 const PRIVATE_KEY = process.env.PRIVATE_KEY
-const TOPUP_ADDRESS = process.env.TOPUP_ADDRESS
+const STROLL_MANAGER_ADDRESS = process.env.STROLL_MANAGER_ADDRESS
 
-const provider = new HDWalletProvider(PRIVATE_KEY, HTTP_RPC)
-const web3 = new Web3(provider)
-const autoTopUp = new web3.eth.Contract(autoTopUpABI, TOPUP_ADDRESS)
-
-const getUnderlyingTokenABI = [
-	{
-		inputs: [],
-		outputs: [{ name: '', type: 'address' }],
-		name: 'getUnderlyingToken',
-		stateMutability: 'view',
-		type: 'function'
-	}
-]
-
-async function getUnderlyingToken(superTokenAddress) {
+async function getUnderlyingToken(web3, superTokenAddress) {
+	// get underlying token logic
+	const getUnderlyingTokenABI = [
+		{
+			inputs: [],
+			outputs: [{ name: '', type: 'address' }],
+			name: 'getUnderlyingToken',
+			stateMutability: 'view',
+			type: 'function'
+		}
+	]
 	const superTokenContract = new web3.eth.Contract(
 		getUnderlyingTokenABI,
 		superTokenAddress
@@ -30,45 +27,54 @@ async function getUnderlyingToken(superTokenAddress) {
 	return await superTokenContract.methods.getUnderlyingToken().call()
 }
 
-function getTopUpIndex(account, superToken, underlyingToken) {
-	return web3.utils.sha3(
-		web3.eth.abi.encodeParameters(
-			['address', 'address', 'address'],
-			[account, superToken, underlyingToken]
-		)
-	)
-}
+async function tryPerformTopUp(
+	strollManager,
+	from,
+	account,
+	superToken,
+	underlyingToken
+) {
+	const topUpAmount = await strollManager.methods
+		.checkTopUp(account, superToken, underlyingToken)
+		.call()
+		.then(amount => amount.toString())
 
-async function performTopUp(index) {
-	return await autoTopUp.methods.performTopUp(index).send()
-}
-
-async function canTopUp(index) {
-	return (await autoTopUp.methods.checkTopUp(index).call())[0]
-}
-
-async function topUp({ account, superToken }) {
-	const underlyingToken = await getUnderlyingToken(superToken)
-	const index = getTopUpIndex(account, superToken, underlyingToken)
-	if (await canTopUp(index)) {
-		performTopUp(index).on('receipt', console.log).on('error', console.error)
-	} else {
+	if (topUpAmount === '0') {
 		console.log(`Account ${account}: Skipping top up.`)
+		return
 	}
-}
 
-// interface Account {
-// 	account: string
-// 	token: string
-// }
-// type Accounts = Array<Account>
+	console.log(`Running Top Up for ${account} on ${superToken}`)
+
+	const tx = await strollManager.methods
+		.performTopUp(account, superToken, underlyingToken)
+		.send({ from })
+	console.log(`Top Up executed: ${tx.transactionHash}`)
+}
 
 async function main() {
-	for (const account of accounts) {
-		await topUp(account)
+	const provider = new HDWalletProvider(PRIVATE_KEY, HTTP_RPC)
+	const web3 = new Web3(provider)
+	const strollManager = new web3.eth.Contract(
+		StrollManagerABI,
+		STROLL_MANAGER_ADDRESS
+	)
+
+	for (const { account, superToken } of accounts) {
+		const underlyingToken = await getUnderlyingToken(web3, superToken)
+		await tryPerformTopUp(
+			strollManager,
+			provider.addresses[0],
+			account,
+			superToken,
+			underlyingToken
+		)
 	}
 }
 
 main()
 	.then(() => process.exit(0))
-	.catch(console.error)
+	.catch(e => {
+		console.error(e)
+		process.exit(1)
+	})
