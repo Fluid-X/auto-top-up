@@ -46,10 +46,21 @@ async function tryPerformTopUp(
 
 	console.log(`Running Top Up for ${account} on ${superToken}`)
 
-	const tx = await strollManager.methods
-		.performTopUp(account, superToken, underlyingToken)
-		.send({ from })
-	console.log(`Top Up executed: ${tx.transactionHash}`)
+	try {
+		const tx = await strollManager.methods
+			.performTopUp(account, superToken, underlyingToken)
+			.send({ from })
+		console.log(`Top Up executed: ${tx.transactionHash}`)
+	} catch (error) {
+		console.error('TRANSACTION FAILED:', error)
+		console.log('RETRYING:')
+
+		const tx = await strollManager.methods
+			.performTopUp(account, superToken, underlyingToken)
+			.send({ from, gasPrice: '100000000000' })
+
+		console.log(`Top Up executed: ${tx.transactionHash}`)
+	}
 }
 
 async function main() {
